@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "杀戮尖塔 2 控制",
+    "description": "通过 STS2 AI Agent 的本地 HTTP API 读取游戏状态、执行出牌/地图/奖励动作；自动发现端口，适合让 Agent 实际打一局。"
+  }
+}
