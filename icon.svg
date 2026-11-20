@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="sts2Bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b2f5c"/>
+      <stop offset="0.55" stop-color="#5b4478"/>
+      <stop offset="1" stop-color="#2a2340"/>
+    </linearGradient>
+    <linearGradient id="sts2Card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5e6c8"/>
+      <stop offset="1" stop-color="#d8b98a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#sts2Bg)"/>
+  <path d="M32 7l9 15-9 7-9-7 9-15Z" fill="#c9a86a"/>
+  <path d="M20 26l12 9 12-9 6 20H14l6-20Z" fill="#8d6b4b"/>
+  <rect x="20" y="34" width="24" height="20" rx="3" fill="url(#sts2Card)" stroke="#5a3f2a" stroke-width="1.5"/>
+  <path d="M32 38l2.6 5.6 6 .7-4.5 4.1 1.2 6-5.3-3-5.3 3 1.2-6-4.5-4.1 6-.7L32 38Z" fill="#b5413f"/>
+  <path d="M25 52h14" stroke="#5a3f2a" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
