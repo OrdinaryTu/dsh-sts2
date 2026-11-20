@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Slay the Spire 2 control",
+    "description": "Read Slay the Spire 2 state and act (cards, map, rewards) through the STS2 AI Agent local HTTP API. Discovers the port automatically and is built for letting an agent actually play."
+  }
+}
