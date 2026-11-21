@@ -129,8 +129,11 @@ dsh plugin --profile desktop add <解压后的目录>
 
 失败会自动重开：`GAME_OVER → 主菜单 → 角色选择 → embark`，不会停在结算界面。每局会自己在可用角色里挑一个，并尽量不和上一局重复。默认**不限时**、最多玩 **4 局**（含启动时当前局）；只有玩满 4 局、连续报错 5 次或 `sts2_runner_stop` 才退出。
 
+另有一个独立 `watchdog.mjs` 外置看门狗：runner 进程消失会自动重启；进程还活着但心跳超过 5 分钟会杀掉重启；每小时最多自动重启 6 次，`autoplay.stop` 会同时停掉它。
+
 - 心跳：`autoplay-status.json`（含 `runs_started` / `max_runs`）
 - 过程日志：`autoplay.log`
+- 看门狗：`autoplay-watchdog.json` / `autoplay-watchdog.log`
 - 停止：`sts2_runner_stop`，或写 `autoplay.stop`
 
 **不要让 goal 和 runner 同时驱动同一局**：启动 runner 前先停掉/完成 goal，否则两边会抢动作。
