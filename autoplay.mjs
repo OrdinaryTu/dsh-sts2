@@ -170,6 +170,13 @@ async function handleChest(view) {
   return null
 }
 
+async function handleCardsView(view) {
+  const actions = view.available_actions || view.actions || []
+  if (actions.includes('close_cards_view')) return doAction('close_cards_view', {}, 'close-cards')
+  if (actions.includes('proceed')) return doAction('proceed', {}, 'cards-proceed')
+  return null
+}
+
 async function handleSelection(view) {
   const selection = view.selection
   if (!selection) return null
@@ -296,6 +303,7 @@ async function step() {
   if (view.screen === 'REST') return handleRest(view)
   if (view.screen === 'SHOP') return handleShop(view)
   if (view.screen === 'CHEST') return handleChest(view)
+  if (view.screen === 'CARD_PILE' || view.screen === 'CARDS_VIEW') return handleCardsView(view)
   if (view.screen === 'CARD_SELECTION') return handleSelection(view)
   log(`waiting on screen ${view.screen}`)
   return null
