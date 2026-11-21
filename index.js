@@ -26,8 +26,39 @@ const RUNNER_SCRIPT = `${PLUGIN_DIR}\\autoplay.mjs`
 const RUNNER_STATUS = `${PLUGIN_DIR}\\autoplay-status.json`
 const RUNNER_LOG = `${PLUGIN_DIR}\\autoplay.log`
 const RUNNER_STOP = `${PLUGIN_DIR}\\autoplay.stop`
+const WATCHDOG_SCRIPT = `${PLUGIN_DIR}\\watchdog.mjs`
+const WATCHDOG_STATUS = `${PLUGIN_DIR}\\autoplay-watchdog.json`
 const execFileAsync = promisify(execFile)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function readPid(file) {
+  try { return Number(JSON.parse(readFileSync(file, 'utf8'))?.pid) || null } catch { return null }
+}
+
+function pidAlive(pid) {
+  if (!pid) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+function ensureWatchdog() {
+  const existing = readPid(WATCHDOG_STATUS)
+  if (pidAlive(existing)) return { pid: existing, already_running: true }
+  const child = spawn('node', [WATCHDOG_SCRIPT], {
+    cwd: PLUGIN_DIR,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+  return { pid: child.pid, already_running: false }
+}
+
+function stopWatchdog() {
+  const pid = readPid(WATCHDOG_STATUS)
+  if (!pid) return null
+  try { process.kill(pid) } catch {}
+  return pid
+}
 
 let cached = { base: null, at: 0 }
 
@@ -814,11 +845,16 @@ export function apply(ctx) {
           try {
             const previous = JSON.parse(readFileSync(RUNNER_STATUS, 'utf8'))
             if (previous?.pid) {
-              try { process.kill(previous.pid, 0); return { ok: true, already_running: true, pid: previous.pid, status: RUNNER_STATUS, log: RUNNER_LOG } } catch {}
+              try {
+                process.kill(previous.pid, 0)
+                const watchdog = ensureWatchdog()
+                return { ok: true, already_running: true, pid: previous.pid, watchdog_pid: watchdog.pid, status: RUNNER_STATUS, log: RUNNER_LOG }
+              } catch {}
             }
           } catch {}
         }
         if (existsSync(RUNNER_STOP)) unlinkSync(RUNNER_STOP)
+        if (existsSync(RUNNER_STATUS)) unlinkSync(RUNNER_STATUS)
         const { data } = await getState()
         if (Number(data.native_profile_id) !== EXPECTED_PROFILE) return { ok: false, error: `当前存档是 ${data.native_profile_id}，不是 ${EXPECTED_PROFILE}；拒绝启动 runner。` }
         const runId = String(args?.run_id || data.run_id || '')
@@ -826,7 +862,8 @@ export function apply(ctx) {
         const maxRuns = Math.max(1, Number(args?.max_runs ?? 4) || 4)
         const child = spawn('node', [RUNNER_SCRIPT, '--run', runId, '--max-minutes', String(maxMinutes), '--max-runs', String(maxRuns)], { cwd: PLUGIN_DIR, detached: true, stdio: 'ignore', windowsHide: true })
         child.unref()
-        return { ok: true, pid: child.pid, run_id: runId, max_minutes: maxMinutes, max_runs: maxRuns, status: RUNNER_STATUS, log: RUNNER_LOG }
+        const watchdog = ensureWatchdog()
+        return { ok: true, pid: child.pid, watchdog_pid: watchdog.pid, run_id: runId, max_minutes: maxMinutes, max_runs: maxRuns, status: RUNNER_STATUS, log: RUNNER_LOG }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
       }
@@ -849,7 +886,11 @@ export function apply(ctx) {
           const text = readFileSync(RUNNER_LOG, 'utf8')
           log = text.split('\n').slice(-30).join('\n')
         }
-        return { ok: true, status_file: RUNNER_STATUS, log_file: RUNNER_LOG, status, log }
+        let watchdog = null
+        if (existsSync(WATCHDOG_STATUS)) {
+          try { watchdog = JSON.parse(readFileSync(WATCHDOG_STATUS, 'utf8')) } catch {}
+        }
+        return { ok: true, status_file: RUNNER_STATUS, log_file: RUNNER_LOG, status, watchdog, log }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
       }
@@ -871,7 +912,8 @@ export function apply(ctx) {
         if (pid) {
           try { process.kill(pid) } catch {}
         }
-        return { ok: true, stopped: Boolean(pid), pid, stop_file: RUNNER_STOP }
+        const watchdogPid = stopWatchdog()
+        return { ok: true, stopped: Boolean(pid), pid, watchdog_pid: watchdogPid, stop_file: RUNNER_STOP }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
       }
