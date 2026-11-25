@@ -1,6 +1,6 @@
 {
   "name": "dsh-sts2",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": false,
   "type": "module",
   "description": "Play Slay the Spire 2 through the STS2 AI Agent local HTTP API: state and action tools with automatic port discovery and a per-profile safety check.",
