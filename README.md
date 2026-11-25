@@ -131,6 +131,8 @@ dsh plugin --profile desktop add <解压后的目录>
 
 另有一个独立 `watchdog.mjs` 外置看门狗：runner 进程消失会自动重启；进程还活着但心跳超过 5 分钟会杀掉重启；每小时最多自动重启 6 次，`autoplay.stop` 会同时停掉它。
 
+启动归属：只有 `sts2_launch` **真正把游戏启动起来**时才会自动拉起 runner；用户自己手动开的游戏不会被自动接管。`sts2_runner_start` 对用户手动启动的游戏默认拒绝，确实要接管时传 `force: true`；`sts2_runner_stop` 会清掉“由她启动”的状态。
+
 - 心跳：`autoplay-status.json`（含 `runs_started` / `max_runs`）
 - 过程日志：`autoplay.log`
 - 看门狗：`autoplay-watchdog.json` / `autoplay-watchdog.log`
