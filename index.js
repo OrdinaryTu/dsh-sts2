@@ -60,7 +60,27 @@ function stopWatchdog() {
   return pid
 }
 
+function startRunnerProcess({ runId = '', maxMinutes = 0, maxRuns = 4 } = {}) {
+  const existing = readPid(RUNNER_STATUS)
+  if (pidAlive(existing)) {
+    const watchdog = ensureWatchdog()
+    return { ok: true, already_running: true, pid: existing, watchdog_pid: watchdog.pid, run_id: runId, max_minutes: maxMinutes, max_runs: maxRuns, status: RUNNER_STATUS, log: RUNNER_LOG }
+  }
+  if (existsSync(RUNNER_STOP)) unlinkSync(RUNNER_STOP)
+  if (existsSync(RUNNER_STATUS)) unlinkSync(RUNNER_STATUS)
+  const child = spawn('node', [RUNNER_SCRIPT, '--run', runId, '--max-minutes', String(maxMinutes), '--max-runs', String(maxRuns)], {
+    cwd: PLUGIN_DIR,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+  const watchdog = ensureWatchdog()
+  return { ok: true, pid: child.pid, watchdog_pid: watchdog.pid, run_id: runId, max_minutes: maxMinutes, max_runs: maxRuns, status: RUNNER_STATUS, log: RUNNER_LOG }
+}
+
 let cached = { base: null, at: 0 }
+let launchedByAgent = false
 
 async function request(url, { method = 'GET', body, timeout = 8000 } = {}) {
   const response = await fetch(url, {
@@ -650,11 +670,12 @@ export function apply(ctx) {
 
   ctx.effect(() => ctx.tools.register({
     name: 'sts2_launch',
-    description: '启动《杀戮尖塔2》并等待 STS2 AI Agent mod API 就绪。游戏已经开着就只等待。优先通过 Steam 启动，失败时尝试直接启动游戏 exe；不碰存档。',
+    description: '启动《杀戮尖塔2》并等待 STS2 AI Agent mod API 就绪。游戏已经开着就只等待，不会自动接管。若由这里真正启动游戏，默认同时启动 autoplay runner。',
     parameters: {
       type: 'object',
       properties: {
         wait_seconds: { type: 'number', description: '最多等待多少秒，默认 90，范围 10–180' },
+        autoplay: { type: 'boolean', description: '真正启动游戏后是否同时启动 runner，默认 true；游戏已经开着时不会启动' },
       },
     },
     output: { schema: outputSchema, render: renderJson },
@@ -662,11 +683,13 @@ export function apply(ctx) {
       const waitSeconds = Math.min(180, Math.max(10, Number(args?.wait_seconds ?? 90) || 90))
       try {
         const alreadyRunning = await gameProcessRunning()
+        if (alreadyRunning) launchedByAgent = false
         let method = null
         if (!alreadyRunning) method = await launchGame()
         const started = Date.now()
         const api = await waitForAgentApi(waitSeconds * 1000)
         const runningNow = await gameProcessRunning()
+        if (!alreadyRunning && runningNow) launchedByAgent = true
         if (!api) {
           return {
             ok: false,
@@ -680,10 +703,20 @@ export function apply(ctx) {
           }
         }
         let screen = null
+        let runId = ''
         try {
           const { data } = await getState()
           screen = data.screen
+          runId = String(data.run_id || '')
         } catch {}
+        let autoplay = null
+        if (!alreadyRunning && runningNow && args?.autoplay !== false) {
+          try {
+            autoplay = startRunnerProcess({ runId, maxMinutes: 0, maxRuns: 4 })
+          } catch (error) {
+            autoplay = { ok: false, error: String(error?.message || error) }
+          }
+        }
         return {
           ok: true,
           already_running: alreadyRunning,
@@ -692,6 +725,7 @@ export function apply(ctx) {
           waited_ms: Date.now() - started,
           base: api.base,
           screen,
+          autoplay,
           health: {
             status: api.health.status,
             mod: api.health.mod_version,
@@ -828,42 +862,38 @@ export function apply(ctx) {
 
   ctx.effect(() => ctx.tools.register({
     name: 'sts2_runner_start',
-    description: '启动常驻 autoplay runner：后台进程直接循环处理战斗、奖励、地图、事件、休息、商店、宝箱和选牌；失败会自动重开，默认最多玩 4 局。只有手动停止或连续报错才结束；会写 autoplay.log / autoplay-status.json。默认接管当前局。',
+    description: '启动常驻 autoplay runner。默认只允许在她自己通过 sts2_launch 真正启动游戏后使用；用户手动开的游戏需要 force=true 才会接管。失败会自动重开，默认最多玩 4 局。',
     parameters: {
       type: 'object',
       properties: {
         run_id: { type: 'string', description: '可选，指定 run_id；默认当前局' },
         max_minutes: { type: 'number', description: '最多运行多少分钟，默认 0（不限时）' },
         max_runs: { type: 'number', description: '最多玩几局（含当前局），默认 4' },
+        force: { type: 'boolean', description: '允许接管用户手动启动的游戏，默认 false' },
       },
     },
     output: { schema: outputSchema, render: renderJson },
     async execute(args) {
       try {
         if (!existsSync(RUNNER_SCRIPT)) return { ok: false, error: `runner 脚本不存在：${RUNNER_SCRIPT}` }
-        if (existsSync(RUNNER_STATUS)) {
-          try {
-            const previous = JSON.parse(readFileSync(RUNNER_STATUS, 'utf8'))
-            if (previous?.pid) {
-              try {
-                process.kill(previous.pid, 0)
-                const watchdog = ensureWatchdog()
-                return { ok: true, already_running: true, pid: previous.pid, watchdog_pid: watchdog.pid, status: RUNNER_STATUS, log: RUNNER_LOG }
-              } catch {}
-            }
-          } catch {}
+        const previousPid = readPid(RUNNER_STATUS)
+        if (pidAlive(previousPid)) {
+          const watchdog = ensureWatchdog()
+          return { ok: true, already_running: true, pid: previousPid, watchdog_pid: watchdog.pid, status: RUNNER_STATUS, log: RUNNER_LOG }
         }
-        if (existsSync(RUNNER_STOP)) unlinkSync(RUNNER_STOP)
-        if (existsSync(RUNNER_STATUS)) unlinkSync(RUNNER_STATUS)
+        if (!launchedByAgent && args?.force !== true) {
+          return {
+            ok: false,
+            error: '这局是用户手动启动的；按约定不自动接管。确实要接管时传 force=true。',
+            hint: '由她启动游戏请用 sts2_launch，它会自动启动 runner。',
+          }
+        }
         const { data } = await getState()
         if (Number(data.native_profile_id) !== EXPECTED_PROFILE) return { ok: false, error: `当前存档是 ${data.native_profile_id}，不是 ${EXPECTED_PROFILE}；拒绝启动 runner。` }
         const runId = String(args?.run_id || data.run_id || '')
         const maxMinutes = Math.max(0, Number(args?.max_minutes ?? 0) || 0)
         const maxRuns = Math.max(1, Number(args?.max_runs ?? 4) || 4)
-        const child = spawn('node', [RUNNER_SCRIPT, '--run', runId, '--max-minutes', String(maxMinutes), '--max-runs', String(maxRuns)], { cwd: PLUGIN_DIR, detached: true, stdio: 'ignore', windowsHide: true })
-        child.unref()
-        const watchdog = ensureWatchdog()
-        return { ok: true, pid: child.pid, watchdog_pid: watchdog.pid, run_id: runId, max_minutes: maxMinutes, max_runs: maxRuns, status: RUNNER_STATUS, log: RUNNER_LOG }
+        return startRunnerProcess({ runId, maxMinutes, maxRuns })
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
       }
@@ -913,6 +943,7 @@ export function apply(ctx) {
           try { process.kill(pid) } catch {}
         }
         const watchdogPid = stopWatchdog()
+        launchedByAgent = false
         return { ok: true, stopped: Boolean(pid), pid, watchdog_pid: watchdogPid, stop_file: RUNNER_STOP }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
