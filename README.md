@@ -133,6 +133,8 @@ dsh plugin --profile desktop add <解压后的目录>
 
 启动归属：只有 `sts2_launch` **真正把游戏启动起来**时才会自动拉起 runner；用户自己手动开的游戏不会被自动接管。`sts2_runner_start` 对用户手动启动的游戏默认拒绝，确实要接管时传 `force: true`；`sts2_runner_stop` 会清掉“由她启动”的状态。
 
+游戏 mod 开关：插件平时会把 `mods/STS2AIAgent.dll`、`.pck`、`mod_id.json` 改名为 `.disabled`，所以你手动开游戏不会加载 mod；`sts2_launch` 真正启动前才恢复，游戏退出后再自动禁用。备份在插件的 `mod-backup/` 目录。代价是 mod 文件会被改名，且游戏没关时禁用不会即时卸载。
+
 - 心跳：`autoplay-status.json`（含 `runs_started` / `max_runs`）
 - 过程日志：`autoplay.log`
 - 看门狗：`autoplay-watchdog.json` / `autoplay-watchdog.log`
