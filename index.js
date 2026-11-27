@@ -10,8 +10,8 @@
 
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, unlinkSync, copyFileSync, renameSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HOST = '127.0.0.1'
@@ -21,6 +21,9 @@ const ENV_BASE = process.env.DSH_STS2_URL ? process.env.DSH_STS2_URL.replace(/\/
 const EXPECTED_PROFILE = Number(process.env.DSH_STS2_PROFILE || 2)
 const GAME_APP_ID = process.env.DSH_STS2_APPID || '2868840'
 const GAME_EXE = process.env.DSH_STS2_EXE || 'E:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2\\SlayTheSpire2.exe'
+const MODS_DIR = join(dirname(GAME_EXE), 'mods')
+const MOD_BACKUP_DIR = join(dirname(fileURLToPath(import.meta.url)), 'mod-backup')
+const MOD_FILES = ['STS2AIAgent.dll', 'STS2AIAgent.pck', 'mod_id.json']
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const RUNNER_SCRIPT = `${PLUGIN_DIR}\\autoplay.mjs`
 const RUNNER_STATUS = `${PLUGIN_DIR}\\autoplay-status.json`
@@ -591,6 +594,55 @@ async function gameProcessRunning() {
   }
 }
 
+function modPaths(name) {
+  return {
+    active: join(MODS_DIR, name),
+    disabled: join(MODS_DIR, `${name}.disabled`),
+    backup: join(MOD_BACKUP_DIR, name),
+  }
+}
+
+function modGateStatus() {
+  const active = MOD_FILES.filter((name) => existsSync(join(MODS_DIR, name)))
+  const disabled = MOD_FILES.filter((name) => existsSync(join(MODS_DIR, `${name}.disabled`)))
+  return { mods_dir: MODS_DIR, active, disabled, enabled: active.length > 0 }
+}
+
+async function ensureModDisabled() {
+  if (await gameProcessRunning()) {
+    return { ok: false, reason: 'game_running', ...modGateStatus() }
+  }
+  mkdirSync(MOD_BACKUP_DIR, { recursive: true })
+  for (const name of MOD_FILES) {
+    const paths = modPaths(name)
+    if (!existsSync(paths.active)) continue
+    try {
+      if (!existsSync(paths.backup)) copyFileSync(paths.active, paths.backup)
+      renameSync(paths.active, paths.disabled)
+    } catch (error) {
+      return { ok: false, reason: 'rename_failed', error: String(error?.message || error), ...modGateStatus() }
+    }
+  }
+  return { ok: true, reason: 'disabled', ...modGateStatus() }
+}
+
+async function ensureModEnabled() {
+  if (await gameProcessRunning()) {
+    return { ok: false, reason: 'game_running', ...modGateStatus() }
+  }
+  for (const name of MOD_FILES) {
+    const paths = modPaths(name)
+    if (existsSync(paths.disabled)) {
+      try {
+        renameSync(paths.disabled, paths.active)
+      } catch (error) {
+        return { ok: false, reason: 'rename_failed', error: String(error?.message || error), ...modGateStatus() }
+      }
+    }
+  }
+  return { ok: true, reason: 'enabled', ...modGateStatus() }
+}
+
 async function launchGame() {
   try {
     const child = spawn('cmd.exe', ['/c', 'start', '', `steam://rungameid/${GAME_APP_ID}`], { detached: true, stdio: 'ignore', windowsHide: true })
@@ -634,6 +686,23 @@ export function apply(ctx) {
     additionalProperties: true,
   }
   const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+
+  // 手动启动游戏时不允许 mod 自动加载；sts2_launch 真正启动前才启用。
+  let modGateBusy = false
+  const syncModGate = async () => {
+    if (modGateBusy) return
+    modGateBusy = true
+    try {
+      if (!(await gameProcessRunning())) await ensureModDisabled()
+    } catch {}
+    finally { modGateBusy = false }
+  }
+  const modGateTimer = setInterval(syncModGate, 4000)
+  modGateTimer.unref?.()
+  ctx.effect(() => {
+    void syncModGate()
+    return () => clearInterval(modGateTimer)
+  })
 
   ctx.effect(() => ctx.tools.register({
     name: 'sts2_status',
@@ -685,10 +754,24 @@ export function apply(ctx) {
         const alreadyRunning = await gameProcessRunning()
         if (alreadyRunning) launchedByAgent = false
         let method = null
-        if (!alreadyRunning) method = await launchGame()
+        let modGate = null
+        if (!alreadyRunning) {
+          modGate = await ensureModEnabled()
+          if (!modGate.ok) {
+            return {
+              ok: false,
+              already_running: false,
+              launched: false,
+              error: `STS2 AI Agent mod 无法启用：${modGate.reason || 'unknown'}`,
+              mod_gate: modGate,
+            }
+          }
+          method = await launchGame()
+        }
         const started = Date.now()
         const api = await waitForAgentApi(waitSeconds * 1000)
         const runningNow = await gameProcessRunning()
+        if (!alreadyRunning && !runningNow) await ensureModDisabled()
         if (!alreadyRunning && runningNow) launchedByAgent = true
         if (!api) {
           return {
@@ -696,6 +779,7 @@ export function apply(ctx) {
             already_running: alreadyRunning,
             launched: !alreadyRunning,
             method,
+            mod_gate: modGate,
             game_running: runningNow,
             waited_ms: Date.now() - started,
             error: `游戏${runningNow ? '已启动' : '还没起来'}，但 mod API 在 ${waitSeconds} 秒内没有响应。`,
@@ -722,6 +806,7 @@ export function apply(ctx) {
           already_running: alreadyRunning,
           launched: !alreadyRunning,
           method,
+          mod_gate: modGate,
           waited_ms: Date.now() - started,
           base: api.base,
           screen,
@@ -944,7 +1029,9 @@ export function apply(ctx) {
         }
         const watchdogPid = stopWatchdog()
         launchedByAgent = false
-        return { ok: true, stopped: Boolean(pid), pid, watchdog_pid: watchdogPid, stop_file: RUNNER_STOP }
+        let modGate = null
+        try { modGate = await ensureModDisabled() } catch (error) { modGate = { ok: false, error: String(error?.message || error) } }
+        return { ok: true, stopped: Boolean(pid), pid, watchdog_pid: watchdogPid, mod_gate: modGate, stop_file: RUNNER_STOP }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
       }
