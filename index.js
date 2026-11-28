@@ -84,6 +84,8 @@ function startRunnerProcess({ runId = '', maxMinutes = 0, maxRuns = 4 } = {}) {
 
 let cached = { base: null, at: 0 }
 let launchedByAgent = false
+let modLaunchInProgress = false
+let modLaunchGuardUntil = 0
 
 async function request(url, { method = 'GET', body, timeout = 8000 } = {}) {
   const response = await fetch(url, {
@@ -691,6 +693,7 @@ export function apply(ctx) {
   let modGateBusy = false
   const syncModGate = async () => {
     if (modGateBusy) return
+    if (modLaunchInProgress || Date.now() < modLaunchGuardUntil) return
     modGateBusy = true
     try {
       if (!(await gameProcessRunning())) await ensureModDisabled()
@@ -750,6 +753,8 @@ export function apply(ctx) {
     output: { schema: outputSchema, render: renderJson },
     async execute(args) {
       const waitSeconds = Math.min(180, Math.max(10, Number(args?.wait_seconds ?? 90) || 90))
+      modLaunchInProgress = true
+      modLaunchGuardUntil = Date.now() + 180_000
       try {
         const alreadyRunning = await gameProcessRunning()
         if (alreadyRunning) launchedByAgent = false
@@ -820,6 +825,8 @@ export function apply(ctx) {
         }
       } catch (error) {
         return { ok: false, error: String(error?.message || error) }
+      } finally {
+        modLaunchInProgress = false
       }
     },
   }))
